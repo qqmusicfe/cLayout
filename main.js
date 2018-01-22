@@ -36,6 +36,9 @@ app.on("ready", function () {
     // 加载应用的 index.html
     mainWindow.loadURL("file://" + __dirname + "/layout.html");
 
+    // 打开开发工具
+    // mainWindow.openDevTools();
+
     // 当 window 被关闭，这个事件会被发出
     mainWindow.on("closed", function () {
         // 取消引用 window 对象，如果你的应用支持多窗口的话，
@@ -416,6 +419,9 @@ ipcMain.on("export-result", function (event, data) {
     };
     try {
         data = JSON.parse(data);
+        if (data.backgroundImage) {
+            data.list.push(data.backgroundImage);
+        }
         saveImg(data.list, function(error) {
             if (error) {
                 console.log(error);

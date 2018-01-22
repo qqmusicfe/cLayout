@@ -4,12 +4,25 @@
     CL.analyse(img, {配置参数}, function(error, data){
         // 返回的data数据结构
         data = {
+            // 页面类型
+            "type": 0, // 0-H5 1-PC
+
             // 页面大小
             "width": 640,
             "height": 2645,
 
             // 页面背景色
             "backgroundColor": "#f3e3f7",
+
+            // PC页背景图
+            "backgroundImage": {
+                "width": 960,
+                "height": 960,
+                "index": "bg",
+                "data": {
+                    "src": "data:image/jpeg;base64,/9j/4AAQS……H7q6I//9k="
+                }
+            },
 
             // 分割出来的图片元素
             "list": [
@@ -162,8 +175,9 @@ var global = this;
     };
 
     // 预加载 wasm
+    var wasmUrl = "./analyse.wasm";
     if (window.WebAssembly) {
-        loadWebAssembly("./analyse.wasm", false);
+        loadWebAssembly(wasmUrl, false);
     }
 
     // worker辅助
@@ -213,7 +227,6 @@ var global = this;
 
         // Worker环境处理
         if (!global.window) {
-            // debugger;
             global.onmessage = function (e) {
                 if (e.data.action && method[e.data.action]) {
                     method[e.data.action](e.data.opts, function (error, data) {
@@ -286,7 +299,7 @@ var global = this;
         var memData;
         var logNo = 0;
 
-        loadWebAssembly("./analyse.wasm", {
+        loadWebAssembly(wasmUrl, {
             env: {
                 jsLog: function (msg) {
                     console.log("[log][%d] %d", ++logNo, msg)
@@ -314,6 +327,8 @@ var global = this;
             }
         }).then(instance => {
             WA = instance.exports;
+
+            let startTime = Date.now();
 
             let MEM_BLOCK = 65535;
             let memory = WA.memory;
@@ -357,12 +372,16 @@ var global = this;
                 ptr += 24;
             }
 
+            data.time = Date.now() - startTime;
+
             callback && callback(null, data);
         });
     });
 
     // 图片分析（js）
     CW.on("js_analyse", function (opts, callback) {
+        let startTime = Date.now();
+
         var imageData = opts.imageData,
             pixes = imageData.data,
             table = [],
@@ -608,6 +627,8 @@ var global = this;
             list: list
         };
 
+        data.time = Date.now() - startTime;
+
         callback && callback(null, data);
     });
 
@@ -848,14 +869,21 @@ var global = this;
     /**
      * @param {Image|Canvas} img 图片
      * @param {Object} opts
+     * @param {Number} opts.engine 使用的解析引擎：0-js，1-WebAssembly
+     * @param {Number} opts.type 页面类型，0-h5页，1-PC页，PC页不进行缩放
      * @param {Number} opts.scope 容错值，解决因为压缩导致的颜色偏差
      * @param {Number} opts.unitSize 精细度，默认为宽度的四十分之一
      * @param {Number} opts.limit 切片高度，超过这个值会进行分割，值小于0时不进行切片
+     * @param {Number} opts.quality 保存的图像质量，默认为0.7
      * @param {Boolean} opts.combine 是否开启小图片合并
-     * @param {Number} opts.engine 使用的解析引擎：0-js，1-WebAssembly
+     * @param {String} opts.bgcolor PC页背景色
+     * @param {Image|Canvas} opts.bgimg PC页背景图
+     * @param {Number} opts.bgtype PC页背景图加载方式，二进制位表示，从右往左分别是： 保持在窗口顶部 | 在垂直方向上重复 | 水平方向拉伸
      * @param {Function} callback 回掉函数
      */
     CL.analyse = function (img, opts, callback) {
+        //////////////////////////////
+        console.log(opts);
         if (CL.isFunction(opts)) {
             callback = opts;
             opts = {};
@@ -864,9 +892,9 @@ var global = this;
         }
         if (CL.isFunction(callback)) {
             var tagName = img && img.tagName;
-            if (tagName == "IMG") {
+            if (tagName === "IMG") {
                 img = this.loadImgToCanvas(img).canvas;
-            } else if (tagName != "CANVAS") {
+            } else if (tagName !== "CANVAS") {
                 return callback(ERR.PARAM_INVALID);
             }
             analyse(img, opts, callback);
@@ -878,14 +906,18 @@ var global = this;
             height = canvas.height,
             sourceData = ctx.getImageData(0, 0, width, height),
             onprogress = opts.onprogress,
+            type = opts.type, // 页面类型，0-h5页，1-PC页，PC页不进行缩放
             unitSize = opts.unitSize || parseInt(width / 40), // 精细度，默认为宽度的四十分之一
             scope = opts.scope, // 容错值，解决因为压缩导致的颜色偏差
             limit = opts.limit, // 切片高度，超过这个值会进行分割
             combine = opts.combine == 1, // 是否开启小图片合并
             engine = opts.engine, // 使用的解析引擎：0-js，1-WebAssembly
-            quality = opts.quality >= 0.5 && opts.quality <= 1 ? opts.quality : 0.7, // 图像质量
+            quality = opts.quality >= 0.5 && opts.quality <= 1 ? opts.quality : 0.7, // 保存的图像质量，默认为0.7
             backgroundColor, // 背景色
             list = []; // 解析结果
+
+        var bgimg; // PC背景图
+        var engineTime; // 解析引擎耗时
 
         series(setting.async, [
             // 图像解析
@@ -906,6 +938,7 @@ var global = this;
                         backgroundColor = data.backgroundColor;
                         unitSize = data.size;
                         list = data.list;
+                        engineTime = data.time;
                     } else {
                         error && console.log(error);
                         error = ERR.ANALYSE_IMG_ERROR;
@@ -1040,20 +1073,22 @@ var global = this;
             // 缩放
             function (data, next) {
                 var _series = this;
-                var canvas = CL.createCanvas();
-                var ctx = canvas.getContext("2d");
-                for (var i = 1; i < 4; i++) {
-                    var w = i * 320,
-                        s = w / width;
-                    if (width > w) {
-                        list.forEach(function (item) {
-                            canvas.width = parseInt(item.width * s);
-                            canvas.height = parseInt(item.height * s);
-                            ctx.drawImage(item.canvas, 0, 0, canvas.width, canvas.height);
-                            item.data[w] = canvas.toDataURL("image/jpeg", quality);
-                        });
-                    } else {
-                        break;
+                if (type != 1) {
+                    var canvas = CL.createCanvas();
+                    var ctx = canvas.getContext("2d");
+                    for (var i = 1; i < 4; i++) {
+                        var w = i * 320,
+                            s = w / width;
+                        if (width > w) {
+                            list.forEach(function (item) {
+                                canvas.width = parseInt(item.width * s);
+                                canvas.height = parseInt(item.height * s);
+                                ctx.drawImage(item.canvas, 0, 0, canvas.width, canvas.height);
+                                item.data[w] = canvas.toDataURL("image/jpeg", quality);
+                            });
+                        } else {
+                            break;
+                        }
                     }
                 }
                 onprogress && onprogress.call(_series);
@@ -1066,19 +1101,42 @@ var global = this;
                     item.data.src = item.canvas.toDataURL("image/jpeg", quality);
                     delete item.canvas;
                 });
+                // PC页背景图
+                if (type == 1 && opts.bgimg) {
+                    bgimg = opts.bgimg;
+                    if (bgimg.tagName === "IMG") {
+                        bgimg = CL.loadImgToCanvas(bgimg).canvas;
+                    }
+                    if (bgimg.tagName === "CANVAS") {
+                        bgimg = {
+                            index: "bg",
+                            width: bgimg.width,
+                            height: bgimg.height,
+                            data: {
+                                src: bgimg.toDataURL("image/jpeg", quality)
+                            }
+                        };
+                    } else {
+                        bgimg = null;
+                    }
+                }
                 onprogress && onprogress.call(_series);
                 next();
             }
         ], function (error) {
-            callback(error, {
+            let data = {
+                opts: opts,
+                type: type,
                 width: width,
                 height: height,
+                backgroundImage: bgimg,
                 backgroundColor: backgroundColor,
-                list: list
-            });
+                list: list,
+                engineTime: engineTime
+            };
+            callback(error, data);
         }, true);
     }
-
 
     return CL;
 });

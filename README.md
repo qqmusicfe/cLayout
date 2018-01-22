@@ -8,6 +8,8 @@
 
 选择设计稿上传，cLayout可以做到：
 
+- 支持移动端H5页/PC页
+
 - 识别背景色
 
 - 识别独立图片元素
@@ -16,23 +18,23 @@
 
 - 自适应，一次导出多种不同尺寸的图，生成的页面能自动选择合适大小的图
 
-- 支持使用 WebAssembly 来提升识别性能
+- 支持使用 WebAssembly 来提升解析性能
 
 下载Electron封装的版本，解压后直接运行目录下的electron.exe，选择设计图按步骤操作就行
 
+> Electron版本在使用 WebAssembly 时，前两次性能反而比较差，第三次开始性能表现恢复正常，还没找到具体原因，直接用浏览器打开 WebAssembly 的性能表现都大幅度由于 js引擎
+
 ## 文件清单
 
-- `clayout.js` 算法文件，负责页面设计图识别解析
-
-- `loadWebAssembly.js` wasm模块加载器
-
-- `analyse.cpp` 解析算法的c++实现
-
-- `analyse.wasm` 编译后的wasm模块
-
-- `template.html` 生成的页面模版，可以修改这个文件实现在生成的页面上增加公共模块（如页头、底栏）
-
-- `clayout-electron.7z` electron封装，支持本地运行导出重构稿
+| 文件 | 说明 |
+|-|-|
+| `clayout.js` | 算法文件，负责页面设计图识别解析 |
+| `layout.html` | Demo入口页面 |
+| `loadWebAssembly.js` | wasm模块加载器 |
+| `analyse.cpp` | 解析算法的c++实现 |
+| `analyse.wasm` | 编译后的wasm模块 |
+| `template.html` | 生成的页面模版，可以修改这个文件实现在生成的页面上增加公共模块（如页头、底栏） |
+| `clayout-electron.7z` | electron封装，支持本地运行导出重构稿 |
 
 ## 调用方法
 
@@ -40,11 +42,22 @@
 CL.analyse(img, {/* 配置参数 */}, function(error, data){
     // 返回的 data 数据结构
     data = {
+        // 页面类型
+        "type": 0, // 0-H5 1-PC
         // 页面大小
         "width": 640,
         "height": 2645,
         // 页面背景色
         "backgroundColor": "#f3e3f7",
+        // PC页背景图
+        "backgroundImage": {
+            "width": 960,
+            "height": 960,
+            "index": "bg",
+            "data": {
+                "src": "data:image/jpeg;base64,/9j/4AAQS……H7q6I//9k="
+            }
+        },
         // 分割出来的图片元素
         "list": [
             // 独立图片元素
